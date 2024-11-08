@@ -121,17 +121,21 @@ void AmdPcNetQueue<IsTransmit>::init(AmdPcNetNic& nic) {
 	}
 	descriptors = arch::dma_array<Descriptor>(nic.dmaPool(), descriptor_count);
 	for(uint32_t i = 0; i < descriptor_count; ++i) {
-		auto buf = arch::dma_buffer(nic.dmaPool(), 2048);
+		auto buf = arch::dma_buffer(nic.dmaPool(), 1520);
 		memset(buf.data(), 0, buf.size());
 		uintptr_t addr = helix_ng::ptrToPhysical(buf.data());
+		uint16_t len = uint16_t(buf.size());
 		buffers.push_back(std::move(buf));
 		//
 		descriptors[i].addr = uint32_t(addr);
-		uint16_t len = uint16_t(1520);
 		len &= 0x0fff;
 		len |= 0xf000;
 		descriptors[i].length = uint16_t(len);
 		descriptors[i].owned = IsTransmit ? 0x00 : 0x80;
+		//
+		if(logDriverStuff) {
+			std::cout << "drivers/amdpcnet: setup@buffer " << (void*)addr << " size " << buf.size() << std::endl;
+		}
 	}
 }
 
@@ -296,6 +300,8 @@ async::result<size_t> AmdPcNetNic::receive(arch::dma_buffer_view frame) {
 	req->index = _rx.next_index;
 	++_rx.next_index;
 	co_await req->event.wait();
+
+	_mmio.load(pcnet32_rdp);
 	co_return frame.size();
 }
 
@@ -311,7 +317,6 @@ async::result<void> AmdPcNetNic::send(const arch::dma_buffer_view frame) {
 	_tx.descriptors[_tx.next_index].owned |= 0x02; //START OF SPLIT PACKET
 	_tx.descriptors[_tx.next_index].owned |= 0x01; //END OF PACKET
 	_tx.descriptors[_tx.next_index].owned |= 0x80; //give it to the device!
-
 	req->index = _tx.next_index;
 	++_tx.next_index;
 	co_await req->event.wait();
@@ -349,7 +354,7 @@ async::detached AmdPcNetNic::processIrqs() {
 				auto req = _rx.requests.front();
 				auto i = req->index;
 				//
-				if((_rx.descriptors[i].data[7] & 0x80) != 0) {
+				if((_rx.descriptors[i].owned & 0x80) != 0) {
 					if(logDriverStuff) {
 						std::cout << "drivers/amdpcnet: breaking RX loop @ " << i << " because it's not owned" << std::endl;
 					}
@@ -361,7 +366,7 @@ async::detached AmdPcNetNic::processIrqs() {
 				}
 				memcpy(req->frame.data(), _rx.buffers[i].data(), 1520); //steal - erm... "borrow" the data
 				req->frame = req->frame.subview(0, 1520);
-				_rx.descriptors[i].data[7] = 0x80; //give device back the buffer
+				_rx.descriptors[i].owned = 0x80; //give device back the buffer
 				//
 				req->event.raise();
 				_rx.requests.pop();
@@ -388,7 +393,7 @@ async::detached AmdPcNetNic::processIrqs() {
 				// code this whole time
 
 				// Skip owned
-				if((_tx.descriptors[i].data[7] & 0x80) == 0) {
+				if((_tx.descriptors[i].owned & 0x80) == 0) {
 					break;
 				}
 				//
@@ -396,7 +401,7 @@ async::detached AmdPcNetNic::processIrqs() {
 					std::cout << "drivers/amdpcnet: TX request @ " << i << "!!!" << std::endl;
 				}
 				// claim the buffer back from the evil pcnet card
-				_tx.descriptors[i].data[7] = 0x00;
+				_tx.descriptors[i].owned = 0x00;
 				//
 				req->event.raise();
 				_tx.requests.pop();
@@ -412,16 +417,22 @@ async::detached AmdPcNetNic::processIrqs() {
 			new_csr0 &= ~((1 << 0) | (1 << 2)); //clear stop and init bit
 			new_csr0 |= (1 << 1); //set start bit
 			new_csr0 |= (1 << 8); //mask off IDON
+			//
+			new_csr0 |= (1 << 3); //Transmit on demand
+			new_csr0 |= (1 << 4); //Enable transmit
+			new_csr0 |= (1 << 5); //Enable receive
 		}
-		new_csr0 |= (1 << 6); //set interrupt enable
+		new_csr0 |= (1 << 6);
 		csr_write(0, new_csr0);
 
 		if(new_csr0 != csr0 && logDriverStuff) {
 			std::cout << "drivers/amdpcnet: CSR0(old)" << (void*)(uintptr_t)csr0 << " != (new)" << (void*)(uintptr_t)new_csr0 << " !!!" << std::endl;
 		}
-
-		//auto csr4 = csr_read(4) | 0x022A;
-		//csr_write(4, csr4);
+		auto const ct = csr_read(0);
+		std::cout << "drivers/amdpcnet: ITNT? " << ((ct & (1 << 6)) != 0 ? "YES" : "NO") << std::endl;
+		std::cout << "drivers/amdpcnet: RXON? " << ((ct & (1 << 5)) != 0 ? "YES" : "NO") << std::endl;
+		std::cout << "drivers/amdpcnet: TXON? " << ((ct & (1 << 4)) != 0 ? "YES" : "NO") << std::endl;
+		std::cout << "drivers/amdpcnet: TDMD? " << ((ct & (1 << 3)) != 0 ? "YES" : "NO") << std::endl;
 
 		HEL_CHECK(helAcknowledgeIrq(_irq.getHandle(), kHelAckAcknowledge, sequence));
 	}
