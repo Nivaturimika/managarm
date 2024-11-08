@@ -29,6 +29,7 @@
 #include <nic/rtl8168/rtl8168.hpp>
 #ifdef __x86_64__
 # include <nic/freebsd-e1000/common.hpp>
+# include <nic/amdpcnet/amdpcnet.hpp>
 #endif
 #include <nic/usb_net/usb_net.hpp>
 #include <protocols/usb/client.hpp>
@@ -46,7 +47,7 @@ const std::string VENDOR_LINKSYS = "1737";
 const std::string VENDOR_US_ROBOTICS = "16ec";
 const std::string VENDOR_REDHAT = "1af4";
 const std::string VENDOR_INTEL = "8086";
-
+const std::string VENDOR_AMD = "1022";
 
 std::unordered_set<std::string_view> nic_vendor_ids = {
 	VENDOR_REDHAT, /* virtio */
@@ -57,6 +58,7 @@ std::unordered_set<std::string_view> nic_vendor_ids = {
 	VENDOR_LINKSYS, /* rtl8168 */
 	VENDOR_US_ROBOTICS, /* rtl8168 */
 	VENDOR_INTEL, /* e1000 */
+	VENDOR_AMD, /* pcnet */
 };
 
 std::unordered_set<std::string_view> virtio_device_ids = {
@@ -84,6 +86,11 @@ std::unordered_set<std::string_view> intel_device_ids = {
 	"100e", /* QEMU's e1000 device */
 	"10d3", /* QEMU's e1000e device */
 	"15d8", /* i219-V (4) */
+};
+
+std::unordered_set<std::string_view> amd_pcnet_device_ids = {
+	"2000", /* AMD PCnet-PCI II */
+	"2001", /* AMD PCnet-PCI III */
 };
 
 std::unordered_map<int64_t, std::shared_ptr<nic::Link>> &nic::Link::getLinks() {
@@ -182,6 +189,8 @@ async::result<protocols::svrctl::Error> doBindPci(mbus_ng::Entity baseEntity) {
 	} else if(determineRTL8168Support(vendor_str->value, device_str->value)) {
 		device = nic::rtl8168::makeShared(std::move(hwDevice));
 #ifdef __x86_64__
+	} else if(vendor_str->value == VENDOR_AMD) {
+		device = nic::amdpcnet::makeShared(std::move(hwDevice));
 	} else if(vendor_str->value == VENDOR_INTEL) {
 		device = nic::e1000::makeShared(std::move(hwDevice));
 #endif

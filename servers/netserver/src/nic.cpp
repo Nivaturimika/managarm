@@ -145,6 +145,12 @@ unsigned int Link::iff_flags() {
 
 async::detached runDevice(std::shared_ptr<nic::Link> dev) {
 	using namespace arch;
+
+	auto buf = dev->allocateFrame(64);
+	arch::dma_buffer_view view{ buf.frame };
+	memcpy(view.data(), "Hello worlddd", 64);
+	co_await dev->send(view);
+
 	while(true) {
 		dma_buffer frameBuffer { dev->dmaPool(), 1514 };
 		auto len = co_await dev->receive(frameBuffer);

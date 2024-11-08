@@ -19,6 +19,7 @@ dep = [ fs_proto_dep, mbus_proto_dep, svrctl_proto_dep, nic_virtio_dep,
 
 if host_machine.cpu_family() == 'x86_64'
 	dep += nic_freebsd_e1000_dep
+	dep += nic_amdpcnet_dep
 endif
 
 executable('netserver', src,
